@@ -1,6 +1,5 @@
-// 1. Paste the web-app settings from Firebase console > Project settings > Your apps.
-//    You can reuse the AV scheduler's Firebase project; this site keeps its data in its
-//    own collections (hm_config and hm_events), so nothing overlaps.
+// 1. Paste the web-app settings from your Holiday Maker's Market Firebase project:
+//    Firebase console > Project settings > General > Your apps > (web app) > Config.
 window.FIREBASE_CONFIG = {
   apiKey: "PASTE_API_KEY",
   authDomain: "PASTE_PROJECT_ID.firebaseapp.com",

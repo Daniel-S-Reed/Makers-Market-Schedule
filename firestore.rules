@@ -1,7 +1,11 @@
-// ADD these blocks inside your existing
-//   match /databases/{database}/documents { ... }
-// block, next to the AV scheduler's rules. Don't replace those.
-// Put your manager account's email where it says MANAGER_EMAIL_HERE.
+rules_version = '2';
+
+// Paste this whole file into Firebase console > Firestore Database > Rules, then click Publish.
+// Replace MANAGER_EMAIL_HERE with the email of the manager account you create
+// (Authentication > Users). Use the same email in firebase-config.js.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
 
     function isHolidayManager() {
       return request.auth != null
@@ -43,3 +47,5 @@
         allow read, delete: if isHolidayManager();
       }
     }
+  }
+}

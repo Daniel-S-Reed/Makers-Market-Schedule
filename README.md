@@ -20,19 +20,21 @@ If you open the pages before filling in `firebase-config.js`, they run in **prev
 | `shared.js` | Schedule logic, PDFs, calendar file, Firebase connection |
 | `styles.css` | Look of both pages |
 | `firebase-config.js` | **You fill this in:** Firebase keys and the manager email |
-| `firestore.rules` | **You paste this into Firebase:** who can read and change what |
+| `firestore.rules` | **You paste this into Firebase:** who can read and change what (the whole file) |
 
 ## Setup (about 15 minutes)
 
-You can reuse the AV scheduler's Firebase project. This site keeps its data in its own collections (`hm_config`, `hm_events`), so the two never touch.
+This site uses its own Firebase project, separate from anything else you run. The free Spark plan is plenty.
 
-1. **Firebase console → Authentication → Sign-in method:** turn on **Anonymous** (volunteers, invisible to them) and **Email/Password** (the manager).
-2. **Authentication → Users → Add user:** create the manager account. Use any email you control and a strong password. That password is the manager page password. Share it only with people who should manage the schedule.
-3. **Authentication → Settings → Authorized domains:** make sure your GitHub Pages domain (`yourname.github.io`) is listed.
-4. **Firestore → Rules:** paste the contents of `firestore.rules` *inside* your existing `match /databases/{database}/documents { … }` block, next to the AV rules (don't replace them). Put the manager email where it says `MANAGER_EMAIL_HERE`. Publish.
-5. **Project settings → Your apps → Web app:** copy the config values into `firebase-config.js` and set `MANAGER_EMAIL` to the same email.
-6. Upload all six files to a GitHub repo (or a folder in one) and turn on **Settings → Pages**.
-7. Open `manager.html`, enter the password, go to **Years** and click **Set up from the original schedule**. Then, in **Set up**, enter the date and location and click **Save**.
+1. **Create the project.** Go to [console.firebase.google.com](https://console.firebase.google.com), click **Add project** (or **Create a project**) and name it something like `makers-market-schedule`. Google Analytics isn't needed, so you can turn it off.
+2. **Add a web app.** On the project overview, click the **</>** (Web) icon, give it a nickname (for example `sign-up site`), leave Firebase Hosting unchecked (GitHub Pages hosts the site), and click **Register app**. Copy the `firebaseConfig` values it shows into `firebase-config.js`.
+3. **Create the database.** Go to **Build → Firestore Database → Create database**. Pick a location near you (for example `us-east1`) and start in **production mode**.
+4. **Paste the rules.** In **Firestore Database → Rules**, replace everything with the contents of `firestore.rules`, put your manager email where it says `MANAGER_EMAIL_HERE`, and click **Publish**.
+5. **Turn on sign-in.** Go to **Build → Authentication → Get started → Sign-in method** and enable **Anonymous** (volunteers sign in invisibly) and **Email/Password** (the manager).
+6. **Create the manager account.** Go to **Authentication → Users → Add user**. Use an email you control and a strong password. That password is the manager page password, so share it only with people who should manage the schedule. Put the same email in `MANAGER_EMAIL` in `firebase-config.js`.
+7. **Allow your site's address.** Go to **Authentication → Settings → Authorized domains → Add domain** and add `daniel-s-reed.github.io`.
+8. **Publish the config.** Commit the filled-in `firebase-config.js` to the repo. It's fine for these keys to be public, but never put the password in the repo.
+9. **Set up the event.** Open `manager.html`, enter the password, go to **Years** and click **Set up from the original schedule**. Then, in **Set up**, enter the date and location and click **Save**.
 
 To change the password later: Firebase console → Authentication → Users → the manager account → Reset password.
 
