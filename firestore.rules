@@ -1,0 +1,45 @@
+// ADD these blocks inside your existing
+//   match /databases/{database}/documents { ... }
+// block, next to the AV scheduler's rules. Don't replace those.
+// Put your manager account's email where it says MANAGER_EMAIL_HERE.
+
+    function isHolidayManager() {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider == 'password'
+        && request.auth.token.email == 'MANAGER_EMAIL_HERE';
+    }
+
+    // Which event is live on the sign-up page.
+    match /hm_config/{docId} {
+      allow read: if true;
+      allow write: if isHolidayManager();
+    }
+
+    // One document per year/event: areas, shifts, positions, times, vendors, agenda.
+    match /hm_events/{eventId} {
+      allow read: if true;
+      allow write: if isHolidayManager();
+
+      // Who is signed up for each position. Anyone using the page can sign up or remove a name.
+      match /slots/{slotId} {
+        allow read: if true;
+        allow create, update: if request.auth != null
+          && request.resource.data.keys().hasOnly(['name', 'shift', 'at', 'by'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 60;
+        allow delete: if request.auth != null;
+      }
+
+      // History of every sign-up and removal. Anyone can add to it; only the manager can read it.
+      match /log/{entryId} {
+        allow create: if request.auth != null
+          && request.resource.data.keys().hasOnly(['type', 'slot', 'shift', 'name', 'actor', 'at', 'by', 'undo'])
+          && request.resource.data.type in ['add', 'remove']
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 60
+          && request.resource.data.actor is string
+          && request.resource.data.actor.size() <= 80;
+        allow read, delete: if isHolidayManager();
+      }
+    }

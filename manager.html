@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Holiday Maker's Market Manager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap wide">
+  <header class="mgrtop">
+    <div>
+      <h1>Manager</h1>
+      <p id="evline" class="muted"></p>
+    </div>
+    <div class="row" id="topctl" hidden>
+      <label class="field" for="evsel">Year / event<select id="evsel"></select></label>
+      <a class="link" href="index.html">Open sign-up page</a>
+      <button class="linkbtn" id="signout" type="button">Lock</button>
+    </div>
+  </header>
+  <div class="notice" id="notice"></div>
+
+  <section class="lock" id="lock" hidden>
+    <h2>Enter the manager password</h2>
+    <p class="muted" id="lockhelp">This page changes the schedule and shows the sign-up history.</p>
+    <form id="lockform">
+      <label class="field" for="pw">Password<input id="pw" type="password" autocomplete="current-password" required></label>
+      <button class="btn take" type="submit">Unlock</button>
+      <div class="err" id="lockerr" role="alert"></div>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="changes">Changes</button>
+      <button class="tab" role="tab" data-tab="coverage">Coverage</button>
+      <button class="tab" role="tab" data-tab="setup">Set up</button>
+      <button class="tab" role="tab" data-tab="years">Years</button>
+    </nav>
+    <div class="panel" id="panel"></div>
+  </div>
+</div>
+<div id="toastHost"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="firebase-config.js"></script>
+<script src="shared.js"></script>
+<script>
+const state={claims:{},log:[],events:[],currentId:null,selId:null,ev:null,draft:null,dirty:false,confirmLoss:false,
+  tab:"changes",filter:"all",search:"",showUndo:false,showSeed:false,open:new Set(),user:null};
+const $=id=>document.getElementById(id);
+const clone=o=>JSON.parse(JSON.stringify(o));
+const when=t=>t?new Date(t).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):"";
+const conn=connectData();
+if(conn.preview)$("notice").textContent="Preview mode: changes are saved only in this browser, and any password unlocks this page. Add your Firebase settings to firebase-config.js to go live.";
+
+/* ---------- lock ---------- */
+$("lockform").addEventListener("submit",async e=>{
+  e.preventDefault();$("lockerr").textContent="";
+  if(!conn.preview&&!conn.managerEmail){$("lockerr").textContent="Add MANAGER_EMAIL to firebase-config.js first.";return}
+  try{await conn.signIn($("pw").value);$("pw").value=""}
+  catch(err){const c=err&&err.code||"";$("lockerr").textContent=/wrong-password|invalid-credential|invalid-login|user-not-found/.test(c)?"That password didn't work.":/too-many-requests/.test(c)?"Too many tries. Wait a few minutes and try again.":"Couldn't unlock. Check your connection and try again."}
+});
+$("signout").onclick=()=>{if(state.dirty&&!confirmDiscard())return;conn.signOut()};
+function confirmDiscard(){if(state.confirmLoss){state.confirmLoss=false;return true}state.confirmLoss=true;toast("You have unsaved setup changes. Click again to discard them.");setTimeout(()=>state.confirmLoss=false,5000);return false}
+
+let started=false;
+conn.onUser(u=>{
+  state.user=u;const ok=!!(u&&u.isManager);
+  $("lock").hidden=ok;$("app").hidden=!ok;$("topctl").hidden=!ok;
+  if(ok&&!started){started=true;startData()}
+});
+
+/* ---------- data ---------- */
+let unsubSlots=null,unsubLog=null,unsubEv=null;
+function startData(){
+  conn.db.onCol(P.events,list=>{state.events=list.sort((a,b)=>(b.data.date||"").localeCompare(a.data.date||""));if(!state.selId&&state.currentId)selectEvent(state.currentId);fillSelect();if(state.tab==="years")renderPanel()});
+  conn.db.onDoc(P.current,c=>{state.currentId=c&&c.eventId||null;if(!state.selId&&state.currentId)selectEvent(state.currentId);fillSelect();renderPanel()});
+}
+function selectEvent(id){
+  if(state.selId===id)return;
+  state.selId=id;state.claims={};state.log=[];state.ev=null;state.draft=null;state.dirty=false;
+  [unsubSlots,unsubLog,unsubEv].forEach(f=>f&&f());
+  let lastJson="";
+  unsubEv=conn.db.onDoc(P.ev(id),ev=>{const js=JSON.stringify(ev);if(js===lastJson)return;lastJson=js;state.ev=ev;if(ev)applyEvent(ev);if(!state.dirty)state.draft=ev?clone(ev):null;$("evline").textContent=ev?[ev.name,dateLabel()].filter(Boolean).join(" · "):"";renderPanel()});
+  unsubSlots=conn.db.onCol(P.slots(id),list=>{const n={};list.forEach(d=>{if(d.data&&d.data.name)n[d.id]=d.data});state.claims=n;if(state.tab!=="setup")renderPanel()});
+  unsubLog=conn.db.onCol(P.log(id),list=>{state.log=list.map(d=>d.data);if(state.tab==="changes")renderPanel()});
+  fillSelect();
+}
+function fillSelect(){
+  const s=$("evsel");s.textContent="";
+  state.events.forEach(e=>{const o=el("option",null,(e.data.name||"Untitled")+(e.data.date?" · "+e.data.date.slice(0,4):"")+(e.id===state.currentId?" (live)":""));o.value=e.id;o.selected=e.id===state.selId;s.append(o)});
+  s.disabled=!state.events.length;
+}
+$("evsel").onchange=e=>{if(state.dirty&&!confirmDiscard()){fillSelect();return}selectEvent(e.target.value)};
+
+/* ---------- tabs ---------- */
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{if(state.tab==="setup"&&state.dirty&&t.dataset.tab!=="setup"&&!confirmDiscard())return;
+  if(state.tab==="setup"&&t.dataset.tab!=="setup"&&state.dirty){state.dirty=false;state.draft=state.ev?clone(state.ev):null}
+  state.tab=t.dataset.tab;renderPanel()});
+function renderPanel(){
+  document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected",t.dataset.tab===state.tab));
+  const p=$("panel");p.textContent="";
+  if(state.tab==="years")return renderYears(p);
+  if(!state.selId||!state.ev){p.append(el("div","empty",state.events.length?"Loading…":"No sign-up sheet yet. Open the Years tab to set one up."));return}
+  ({changes:renderChanges,coverage:renderCoverage,setup:renderSetup})[state.tab](p);
+}
+
+/* ---------- Changes ---------- */
+function slotInfo(slot){
+  const [sid,key]=slot.split("-"),sh=(state.ev.shifts||[]).find(s=>s.id===sid),sl=sh&&sh.slots.find(x=>x.key===key);
+  return sh?{text:sh.t+(sl?" · "+sl.role:""),time:range(sh)}:{text:"(position no longer in the schedule)",time:""};
+}
+function renderChanges(p){
+  const log=state.log.slice().sort((a,b)=>(b.at||0)-(a.at||0));
+  const removes=log.filter(r=>r.type==="remove"&&!r.undo);
+  const nextAdd=r=>state.log.filter(a=>a.type==="add"&&a.slot===r.slot&&(a.at||0)>(r.at||0)).sort((a,b)=>a.at-b.at)[0];
+  const replaced=removes.filter(nextAdd).length,stillOpen=removes.filter(r=>r.actor!=="Manager (setup change)"&&!nextAdd(r)&&!state.claims[r.slot]).length;
+  const st=el("div","stats");[[log.filter(r=>r.type==="add"&&r.actor!=="Original schedule").length,"sign-ups"],[removes.length,"names removed"],[replaced,"replaced"],[stillOpen,"removed & still open"]]
+    .forEach(([n,l])=>{const d=el("div");d.append(el("b",null,String(n)),el("span",null,l));st.append(d)});
+  p.append(st);
+  const ctl=el("div","row");ctl.style.margin="16px 0 12px";
+  [["all","All changes"],["remove","Removals"],["add","Sign-ups"]].forEach(([k,l])=>{const b=el("button","chip",l);b.setAttribute("aria-pressed",state.filter===k);b.onclick=()=>{state.filter=k;renderPanel()};ctl.append(b)});
+  const q=el("input");q.type="search";q.id="logsearch";q.placeholder="Search a name";q.value=state.search;q.setAttribute("aria-label","Search a name");
+  q.oninput=()=>{state.search=q.value;const pos=q.selectionStart;renderPanel();const n=$("logsearch");n.focus();n.setSelectionRange(pos,pos)};ctl.append(q);
+  const lab=el("label","row muted");const cb=el("input");cb.type="checkbox";cb.checked=state.showUndo;cb.onchange=()=>{state.showUndo=cb.checked;renderPanel()};lab.append(cb,"Show quick undos");lab.style.fontSize="13px";ctl.append(lab);
+  const lab2=el("label","row muted");const cb2=el("input");cb2.type="checkbox";cb2.checked=state.showSeed;cb2.onchange=()=>{state.showSeed=cb2.checked;renderPanel()};lab2.append(cb2,"Show starting names");lab2.style.fontSize="13px";ctl.append(lab2);
+  p.append(ctl);
+  const s=norm(state.search);
+  const rows=log.filter(r=>(state.filter==="all"||r.type===state.filter)&&(state.showUndo||!r.undo)&&(state.showSeed||r.actor!=="Original schedule")&&(!s||norm(r.name).includes(s)||norm(r.actor).includes(s)));
+  if(!rows.length){p.append(el("div","empty",log.length?"No changes match.":"No changes yet. Sign-ups and removals will show up here."));return}
+  const wrap=el("div","tablewrap"),t=el("table"),hd=el("tr");["When","Change","Name","Position","What happened next"].forEach(h=>hd.append(el("th",null,h)));
+  const thead=el("thead");thead.append(hd);t.append(thead);const tb=el("tbody");
+  rows.forEach(r=>{
+    const tr=el("tr"),info=slotInfo(r.slot);
+    tr.append(el("td","num",when(r.at)));
+    const c=el("td");c.append(el("span","pill "+(r.type==="add"?"add":"remove"),r.type==="add"?"Signed up":"Removed"));tr.append(c);
+    tr.append(el("td",null,r.name||""));
+    const pos=el("td");pos.append(el("div",null,info.text),el("div","muted",info.time));tr.append(pos);
+    const nx=el("td");
+    if(r.type==="remove"){
+      const by=r.actor==="Manager (setup change)"?"Removed when the setup changed":r.undo?"Undone right after signing up":!r.actor?"Removed by someone who didn't enter a name":norm(r.actor)===norm(r.name)?"Removed themselves":"Removed by "+r.actor;
+      nx.append(el("div","muted",by));
+      const a=nextAdd(r);
+      if(r.actor==="Manager (setup change)"&&!a){nx.append(el("div","muted","Position deleted"));tr.append(nx);tb.append(tr);return}
+      if(a)nx.append(el("div","ok","Replaced by "+a.name+" · "+when(a.at)));
+      else if(state.claims[r.slot])nx.append(el("div","ok","Now filled by "+state.claims[r.slot].name));
+      else nx.append(el("div","bad","Still open"));
+    }else nx.append(el("div","muted",r.actor==="Original schedule"?"From the original schedule":""));
+    tr.append(nx);tb.append(tr);
+  });
+  t.append(tb);wrap.append(t);p.append(wrap);
+}
+
+/* ---------- Coverage ---------- */
+function renderCoverage(p){
+  let total=0,filled=0;const per={};AREA_ORDER.forEach(k=>per[k]={t:0,f:0});const open=[];
+  SHIFTS.forEach(sh=>sh.slots.forEach(sl=>{total++;per[sh.a].t++;if(claimOf(slotId(sh,sl))){filled++;per[sh.a].f++}else open.push({sh,sl})}));
+  const st=el("div","stats");[[total-filled,"open slots"],[filled+" / "+total,"filled"],[assignments().length,"people signed up"]].forEach(([n,l])=>{const d=el("div");d.append(el("b",null,String(n)),el("span",null,l));st.append(d)});p.append(st);
+  const pr=el("div","row");pr.style.marginTop="14px";
+  const b=el("button","btn take","Everyone's assignments PDF");b.onclick=allPdf;pr.append(b);p.append(pr);
+  const sec=el("div","section");sec.append(el("h2",null,"By area"));const g=el("div","covgrid");
+  AREA_ORDER.forEach(k=>{const c=el("div","card");c.style.setProperty("--c",AREAS[k].color);c.append(el("div","tag areaColor",AREAS[k].label));
+    const n=el("b",null,per[k].f+" / "+per[k].t);c.append(n,el("span","muted"," filled"));const m=el("div","meter"),i=el("i");i.style.width=(per[k].t?per[k].f/per[k].t*100:0)+"%";m.append(i);c.append(m);g.append(c)});
+  sec.append(g);p.append(sec);
+  const s2=el("div","section");s2.append(el("h2",null,"Open slots"));
+  if(!open.length)s2.append(el("div","empty","Every slot is filled."));
+  else{const w=el("div","tablewrap"),t=el("table"),h=el("tr");["Time","Area","Shift","Position"].forEach(x=>h.append(el("th",null,x)));const th=el("thead");th.append(h);t.append(th);const tb=el("tbody");
+    open.forEach(({sh,sl})=>{const tr=el("tr");tr.append(el("td","num",range(sh)));const a=el("td","areaColor",AREAS[sh.a].label);a.style.setProperty("--c",AREAS[sh.a].color);tr.append(a,el("td",null,sh.t),el("td",null,sl.role));tb.append(tr)});
+    t.append(tb);w.append(t);s2.append(w)}
+  p.append(s2);
+}
+
+/* ---------- Set up (edits a draft; nothing changes until Save) ---------- */
+function touch(){state.dirty=true;drawSaveBar()}
+function inp(type,val,on,attrs){const i=el(type==="textarea"?"textarea":"input");if(type!=="textarea")i.type=type;i.value=val==null?"":val;i.oninput=()=>{on(i.value);touch()};Object.assign(i,attrs||{});return i}
+function fieldOf(label,control){const f=el("label","field");f.append(label,control);return f}
+function filledName(shId,key){const c=state.claims[shId+"-"+key];return c?c.name:""}
+function renderSetup(p){
+  const d=state.draft;if(!d)return;
+  d.shifts.sort((a,b)=>a.start-b.start||d.areas.findIndex(x=>x.key===a.a)-d.areas.findIndex(x=>x.key===b.a));
+  p.append(el("p","muted","Changes here affect the sign-up page as soon as you save. Names already signed up stay in their positions unless you delete that position or shift."));
+  // event basics
+  let s=el("div","section");s.append(el("h2",null,"Event"));const g=el("div","grid2");
+  g.append(fieldOf("Name",inp("text",d.name,v=>d.name=v,{maxLength:80})),fieldOf("Date",inp("date",d.date,v=>d.date=v)),fieldOf("Location",inp("text",d.location,v=>d.location=v,{placeholder:"Address for calendar invites",maxLength:160})));
+  s.append(g);p.append(s);
+  // areas
+  s=el("div","section");s.append(el("h2",null,"Areas"),el("p",null,"Each area is a column on the printed schedule and a filter on the sign-up page."));
+  d.areas.forEach((a,i)=>{const r=el("div","winrow");const col=inp("color",a.color,v=>a.color=v);col.setAttribute("aria-label","Color for "+a.label);
+    const lab=inp("text",a.label,v=>a.label=v,{maxLength:40});lab.setAttribute("aria-label","Area name");
+    const up=el("button","btn ghost","↑");up.disabled=!i;up.setAttribute("aria-label","Move up");up.onclick=()=>{[d.areas[i-1],d.areas[i]]=[d.areas[i],d.areas[i-1]];touch();renderPanel()};
+    const dn=el("button","btn ghost","↓");dn.disabled=i===d.areas.length-1;dn.setAttribute("aria-label","Move down");dn.onclick=()=>{[d.areas[i+1],d.areas[i]]=[d.areas[i],d.areas[i+1]];touch();renderPanel()};
+    const used=d.shifts.filter(x=>x.a===a.key).length,rm=used?el("span","muted","Used by "+used+" shift"+(used>1?"s":"")):el("button","linkbtn danger","Remove");if(!used)rm.onclick=()=>{d.areas.splice(i,1);touch();renderPanel()};
+    r.append(col,lab,up,dn,rm);s.append(r)});
+  const addA=el("button","btn ghost","+ Add area");addA.onclick=()=>{d.areas.push({key:"a"+uid8(),label:"New area",color:"#5d6470"});touch();renderPanel()};s.append(addA);p.append(s);
+  // shifts
+  s=el("div","section");s.append(el("h2",null,"Shifts & positions"),el("p",null,"Open a shift to change its name, area, times, description or positions."));
+  d.shifts.forEach((sh,i)=>s.append(shiftEditor(sh,i)));
+  const addS=el("button","btn ghost","+ Add shift");addS.onclick=()=>{const n={id:"s"+uid8(),a:(d.areas[0]||{}).key,t:"New shift",start:600,end:660,d:"",slots:[{role:"Staff",key:"p"+uid8()}]};d.shifts.push(n);state.open.add(n.id);touch();renderPanel()};
+  s.append(addS);p.append(s);
+  // vendors
+  const v=d.vendors=d.vendors||{perWindow:5,setup:[],unload:[]};
+  s=el("div","section");s.append(el("h2",null,"Vendors"));const vg=el("div","grid2");
+  vg.append(fieldOf("Vendors per window",inp("number",v.perWindow,x=>v.perWindow=+x||0,{min:0,max:99})),
+    fieldOf("Set-up deadline",inp("time",v.deadline!=null?toHM(v.deadline):"",x=>v.deadline=x?fromHM(x):null)),
+    fieldOf("Note for vendors",inp("text",v.note,x=>v.note=x,{maxLength:200})));
+  s.append(vg);
+  [["setup","Set-up windows",20],["unload","Unload windows",15]].forEach(([k,label,len])=>{
+    v[k]=v[k]||[];const h=el("h3",null,label);h.style.margin="16px 0 8px";s.append(h);
+    v[k].forEach((w,i)=>s.append(winRow(w,()=>{v[k].splice(i,1);touch();renderPanel()},(i+1)+".")));
+    const b=el("button","btn ghost","+ Add window");b.onclick=()=>{const last=v[k][v[k].length-1];const st=last?last.end:k==="setup"?480:900;v[k].push({start:st,end:st+len});touch();renderPanel()};s.append(b);
+  });
+  p.append(s);
+  // agenda
+  d.agenda=d.agenda||[];
+  s=el("div","section");s.append(el("h2",null,"Agenda"),el("p",null,"The left-hand column of the printed schedule."));
+  d.agenda.sort((a,b)=>a.start-b.start).forEach((a,i)=>{const r=winRow(a,()=>{d.agenda.splice(i,1);touch();renderPanel()});const t=inp("text",a.text,x=>a.text=x,{maxLength:160});t.style.flex="1 1 240px";t.setAttribute("aria-label","Agenda item");r.insertBefore(t,r.lastChild);s.append(r)});
+  const addG=el("button","btn ghost","+ Add agenda item");addG.onclick=()=>{const last=d.agenda[d.agenda.length-1];const st=last?last.end:480;d.agenda.push({start:st,end:st+30,text:""});touch();renderPanel()};s.append(addG);p.append(s);
+  s=el("div","section");s.append(el("h2",null,"Footnote"));s.append(inp("textarea",d.footnote,x=>d.footnote=x,{maxLength:400}));p.append(s);
+  const bar=el("div","savebar");bar.id="savebar";p.append(bar);drawSaveBar();
+}
+function winRow(w,onRemove,prefix){
+  const r=el("div","winrow");if(prefix)r.append(el("span","muted",prefix));
+  const a=inp("time",toHM(w.start),x=>w.start=fromHM(x)),b=inp("time",toHM(w.end),x=>w.end=fromHM(x));a.setAttribute("aria-label","Start");b.setAttribute("aria-label","End");
+  const rm=el("button","linkbtn danger","Remove");rm.onclick=onRemove;r.append(a,el("span","muted","to"),b,rm);return r;
+}
+function shiftEditor(sh,i){
+  const d=state.draft,area=d.areas.find(a=>a.key===sh.a)||{label:"(no area)",color:"#5d6470"};
+  const det=el("details","editShift");det.style.setProperty("--c",area.color);det.open=state.open.has(sh.id);
+  det.ontoggle=()=>det.open?state.open.add(sh.id):state.open.delete(sh.id);
+  const sum=el("summary");const nf=sh.slots.filter(sl=>filledName(sh.id,sl.key)).length;
+  sum.append(el("span","num",range(sh)),el("span","t",sh.t||"(untitled)"),el("span","m",area.label+" · "+sh.slots.length+" position"+(sh.slots.length===1?"":"s")+", "+nf+" filled"));det.append(sum);
+  const b=el("div","body"),g=el("div","grid2");
+  const sel=el("select");d.areas.forEach(a=>{const o=el("option",null,a.label);o.value=a.key;o.selected=a.key===sh.a;sel.append(o)});sel.onchange=()=>{sh.a=sel.value;touch();renderPanel()};
+  g.append(fieldOf("Shift name",inp("text",sh.t,v=>sh.t=v,{maxLength:80})),fieldOf("Area",sel),
+    fieldOf("Starts",inp("time",toHM(sh.start),v=>sh.start=fromHM(v))),fieldOf("Ends",inp("time",toHM(sh.end),v=>sh.end=fromHM(v))));
+  b.append(g,fieldOf("What the job involves",inp("textarea",sh.d,v=>sh.d=v,{maxLength:1000})));
+  const pos=el("div");pos.append(el("strong",null,"Positions"));
+  sh.slots.forEach((sl,j)=>{const r=el("div","pos");const t=inp("text",sl.role,v=>sl.role=v,{maxLength:40});t.setAttribute("aria-label","Position name");r.append(t);
+    const who=filledName(sh.id,sl.key);if(who)r.append(el("span","filled","Filled by "+who));
+    const rm=el("button","linkbtn danger","Remove");rm.onclick=()=>{sh.slots.splice(j,1);touch();renderPanel()};r.append(rm);pos.append(r)});
+  const addP=el("button","btn ghost","+ Add position");addP.onclick=()=>{sh.slots.push({role:(sh.slots[sh.slots.length-1]||{role:"Staff"}).role,key:"p"+uid8()});touch();renderPanel()};
+  pos.append(addP);b.append(pos);
+  const act=el("div","row");
+  const dup=el("button","btn ghost","Duplicate shift");dup.onclick=()=>{const c=clone(sh);c.id="s"+uid8();c.slots.forEach(x=>x.key="p"+uid8());c.start=sh.end;c.end=sh.end+(sh.end-sh.start);d.shifts.push(c);state.open.add(c.id);touch();renderPanel()};
+  const del=el("button","linkbtn danger","Delete shift");del.onclick=()=>{d.shifts.splice(d.shifts.indexOf(sh),1);touch();renderPanel()};
+  act.append(dup,del);b.append(act);det.append(b);return det;
+}
+function problems(d){
+  const out=[];
+  if(!d.name.trim())out.push("The event needs a name.");
+  d.areas.forEach(a=>{if(!a.label.trim())out.push("An area is missing its name.")});
+  d.shifts.forEach(sh=>{const n=sh.t||"A shift";if(!sh.t.trim())out.push("A shift at "+fmt(sh.start)+" is missing its name.");if(sh.end<=sh.start)out.push(n+" ends before it starts.");
+    if(!sh.slots.length)out.push(n+" ("+fmt(sh.start)+") has no positions.");if(sh.slots.some(sl=>!sl.role.trim()))out.push(n+" ("+fmt(sh.start)+") has a position with no name.")});
+  ["setup","unload"].forEach(k=>(d.vendors[k]||[]).forEach(w=>{if(w.end<=w.start)out.push("A vendor window ends before it starts.")}));
+  d.agenda.forEach(a=>{if(a.end<=a.start)out.push("An agenda item ends before it starts.")});
+  return [...new Set(out)];
+}
+function lostNames(d){
+  const keep=new Set();d.shifts.forEach(sh=>sh.slots.forEach(sl=>keep.add(sh.id+"-"+sl.key)));
+  return Object.entries(state.claims).filter(([id])=>!keep.has(id)).map(([id,c])=>({id,c}));
+}
+let saveConfirm=false;
+function drawSaveBar(){
+  const bar=$("savebar");if(!bar)return;bar.textContent="";bar.hidden=!state.dirty;if(!state.dirty)return;
+  const d=state.draft,probs=problems(d),lost=lostNames(d);
+  bar.append(el("strong",null,"Unsaved changes"));
+  const btns=el("div","row");
+  const dis=el("button","btn ghost","Discard");dis.onclick=()=>{state.draft=clone(state.ev);state.dirty=false;saveConfirm=false;renderPanel()};
+  const sv=el("button","btn take",lost.length&&saveConfirm?"Save and remove "+lost.length+" name"+(lost.length>1?"s":""):"Save");sv.disabled=!!probs.length;sv.onclick=save;
+  btns.append(dis,sv);bar.append(btns);
+  if(probs.length)bar.append(el("div","warnmsg","Fix before saving: "+probs.slice(0,3).join(" ")+(probs.length>3?" (+"+(probs.length-3)+" more)":"")));
+  else if(lost.length&&saveConfirm)bar.append(el("div","warnmsg","These people are in positions you deleted and will be taken off the schedule: "+lost.map(x=>x.c.name).join(", ")+". The change is recorded in Changes."));
+}
+async function save(){
+  const d=state.draft,lost=lostNames(d);
+  if(lost.length&&!saveConfirm){saveConfirm=true;drawSaveBar();return}
+  const ops=[{op:"set",path:P.ev(state.selId),data:clone(d)}];
+  lost.forEach(({id,c})=>{ops.push({op:"delete",path:P.slots(state.selId)+"/"+id},{op:"add",coll:P.log(state.selId),data:{type:"remove",slot:id,shift:id.split("-")[0],name:c.name,actor:"Manager (setup change)",at:Date.now(),by:state.user.uid}})});
+  try{await conn.db.commit(ops);state.dirty=false;saveConfirm=false;toast("Setup saved. The sign-up page now shows these changes.");renderPanel()}
+  catch(e){toast("Couldn't save. Check your connection and that you're still unlocked.")}
+}
+
+/* ---------- Years ---------- */
+function newEventId(date){const base="ev-"+(date?date.slice(0,4):uid8());let id=base,i=2;while(state.events.some(e=>e.id===id))id=base+"-"+i++;return id}
+function renderYears(p){
+  if(!state.events.length){
+    const c=el("div","card");c.append(el("h2",null,"Set up the first sign-up sheet"),el("p","muted","Creates this year's event from the original planning document, with all its shifts, positions, vendor windows and the 39 names already assigned. You can change everything afterwards in Set up."));
+    const b=el("button","btn take","Set up from the original schedule");b.onclick=async()=>{
+      b.disabled=true;const id=newEventId(""),now=Date.now(),ops=[{op:"set",path:P.ev(id),data:clone(DEFAULT_SETUP)},{op:"set",path:P.current,data:{eventId:id}}];
+      Object.entries(SEED).forEach(([slot,name])=>{ops.push({op:"set",path:P.slots(id)+"/"+slot,data:{name,shift:slot.split("-")[0],at:now,by:""}},{op:"add",coll:P.log(id),data:{type:"add",slot,shift:slot.split("-")[0],name,actor:"Original schedule",at:now,by:""}})});
+      try{await conn.db.commit(ops);state.selId=null;selectEvent(id);state.tab="setup";toast("Sign-up sheet created. Set the date and location here.");renderPanel()}catch(e){b.disabled=false;toast("Couldn't create it. Check your connection.")}
+    };c.append(b);p.append(c);return;
+  }
+  const s=el("div","section");s.style.marginTop="0";s.append(el("h2",null,"All years"));
+  const w=el("div","tablewrap"),t=el("table"),h=el("tr");["Event","Date","",""].forEach(x=>h.append(el("th",null,x)));const th=el("thead");th.append(h);t.append(th);const tb=el("tbody");
+  state.events.forEach(e=>{const tr=el("tr"),n=el("td");n.append(el("strong",null,e.data.name||"Untitled"));if(e.id===state.currentId){n.append(" ");n.append(el("span","pill cur","Live on sign-up page"))}
+    tr.append(n,el("td","num",e.data.date||"No date"));
+    const v=el("td");const vb=el("button","linkbtn",e.id===state.selId?"Viewing":"View");vb.disabled=e.id===state.selId;vb.onclick=()=>{if(state.dirty&&!confirmDiscard())return;selectEvent(e.id);renderPanel()};v.append(vb);
+    const m=el("td");if(e.id!==state.currentId){const mb=el("button","linkbtn","Make live");mb.onclick=async()=>{await conn.db.commit([{op:"set",path:P.current,data:{eventId:e.id}}]);toast((e.data.name||"Event")+" is now on the sign-up page.")};m.append(mb)}
+    tr.append(v,m);tb.append(tr)});
+  t.append(tb);w.append(t);s.append(w);p.append(s);
+  // next year
+  const src=state.ev||(state.events[0]&&state.events[0].data);if(!src)return;
+  const ny=el("div","section card");ny.append(el("h2",null,"Start next year"),el("p","muted","Copies every area, shift, position, time, vendor window and agenda item from "+(src.name||"this event")+(src.date?" ("+src.date.slice(0,4)+")":"")+". No names are copied. Last year stays here with its sign-ups and history."));
+  const nextDate=src.date?(+src.date.slice(0,4)+1)+src.date.slice(4):"";
+  const g=el("div","grid2");const nm=el("input");nm.type="text";nm.value=(src.name||"").replace(/\b(20\d\d)\b/,y=>+y+1);nm.id="nyname";const dt=el("input");dt.type="date";dt.value=nextDate;dt.id="nydate";
+  g.append(fieldOf("Name",nm),fieldOf("Date",dt));ny.append(g);
+  const lab=el("label","row");lab.style.margin="12px 0";const cb=el("input");cb.type="checkbox";cb.checked=true;cb.id="nylive";lab.append(cb,"Put it on the sign-up page right away");ny.append(lab);
+  const go=el("button","btn take","Create next year");go.onclick=async()=>{
+    if(!nm.value.trim()){toast("Give the new event a name.");return}
+    const id=newEventId(dt.value),data=clone(src);data.name=nm.value.trim();data.date=dt.value;
+    const ops=[{op:"set",path:P.ev(id),data}];if(cb.checked)ops.push({op:"set",path:P.current,data:{eventId:id}});
+    try{await conn.db.commit(ops);selectEvent(id);state.tab="setup";toast(data.name+" created. Review the setup and save any changes.");renderPanel()}catch(e){toast("Couldn't create it. Check your connection.")}
+  };
+  ny.append(go);p.append(ny);
+}
+</script>
+</body>
+</html>

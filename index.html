@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Holiday Maker's Market Sign-Up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title">Holiday Maker's Market<br>Shift Sign-Up</h1>
+    <p class="dateline" id="eventline"></p>
+    <p>Pick any dashed slot and tap <strong>Sign up</strong>. Names save instantly and everyone sees the same list. Tap the details on a shift to see what the job involves.</p>
+    <div class="stats" id="stats" aria-live="polite"></div>
+    <div class="vendors" id="vendors" hidden></div>
+  </header>
+
+  <div class="bar">
+    <div class="namerow">
+      <label for="myname">Your name</label>
+      <input id="myname" type="text" autocomplete="name" placeholder="First and last name" maxlength="60">
+    </div>
+    <div class="chips" id="areas" role="group" aria-label="Filter by area"></div>
+    <div class="chips" role="group" aria-label="Show">
+      <button class="chip" id="f-open" aria-pressed="false">Open slots only</button>
+      <button class="chip" id="f-mine" aria-pressed="false">My shifts</button>
+    </div>
+    <div class="exportbar">
+      <span class="muted">Download PDF:</span>
+      <button class="linkbtn" id="pdf-mine" type="button">My schedule</button>
+      <button class="linkbtn" id="pdf-all" type="button">Everyone's assignments</button>
+      <span class="muted sep">Calendar:</span>
+      <button class="linkbtn" id="cal-mine" type="button">All my shifts (.ics)</button>
+    </div>
+  </div>
+
+  <div class="notice" id="notice"></div>
+  <main id="timeline"><div class="empty">Loading the schedule…</div></main>
+
+  <p class="foot" id="footnote"></p>
+  <p class="foot"><a class="link" href="manager.html">Manager page</a></p>
+</div>
+<div id="toastHost"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="firebase-config.js"></script>
+<script src="shared.js"></script>
+<script>
+const state={claims:{},eventId:null,area:"all",openOnly:false,mine:false,confirm:null,db:null,uid:"",loaded:false};
+const nameInput=document.getElementById("myname");
+try{nameInput.value=localStorage.getItem("hm-name")||""}catch(e){}
+nameInput.addEventListener("input",()=>{nameInput.classList.remove("need");try{localStorage.setItem("hm-name",nameInput.value.trim())}catch(e){};render()});
+const myName=()=>nameInput.value.trim().replace(/\s+/g," ");
+const isMine=c=>c&&((state.uid&&c.by===state.uid)||(myName()&&norm(c.name)===norm(myName())));
+const needName=()=>{nameInput.classList.add("need");nameInput.focus();toast("Type your name at the top first.")};
+
+/* ---------- header pieces built from the event setup ---------- */
+function renderHeader(){
+  document.title=EV.name+" Sign-Up";
+  const t=document.getElementById("title");t.textContent="";t.append(EV.name,document.createElement("br"),"Shift Sign-Up");
+  document.getElementById("eventline").textContent=[dateLabel(),EV.location].filter(Boolean).join(" · ");
+  document.getElementById("footnote").textContent=EV.footnote||"";
+  const v=EV.vendors||{},box=document.getElementById("vendors");box.textContent="";
+  const win=(title,intro,list)=>{if(!list||!list.length)return;box.append(el("h3",null,title),el("p",null,intro));const ol=el("ol");
+    list.forEach(w=>{const li=el("li");const b=el("b",null,fmt(w.start).replace(/ [AP]M/,""));li.append(b," – "+fmt(w.end));ol.append(li)});box.append(ol)};
+  win("Vendor set-up times",(v.perWindow||0)+" vendors arrive in each window."+(v.deadline!=null?" All vendors must be set up by "+fmt(v.deadline)+".":""),v.setup);
+  win("Vendor unload times",(v.perWindow||0)+" vendors per group."+(v.note?" "+v.note:""),v.unload);
+  box.hidden=!box.childNodes.length;
+  // area filter chips
+  const host=document.getElementById("areas");host.textContent="";
+  if(state.area!=="all"&&!AREAS[state.area])state.area="all";
+  [["all",{label:"All areas"}],...AREA_ORDER.map(k=>[k,AREAS[k]])].forEach(([k,v])=>{
+    const b=el("button","chip");b.dataset.area=k;b.setAttribute("aria-pressed",state.area===k);
+    if(v.color){const d=el("span","dot");d.style.setProperty("--c",v.color);b.append(d)}
+    b.append(v.label);b.onclick=()=>{state.area=k;host.querySelectorAll(".chip").forEach(c=>c.setAttribute("aria-pressed",c.dataset.area===k));render()};
+    host.append(b);
+  });
+}
+const fOpen=document.getElementById("f-open"),fMine=document.getElementById("f-mine");
+fOpen.onclick=()=>{state.openOnly=!state.openOnly;fOpen.setAttribute("aria-pressed",state.openOnly);render()};
+fMine.onclick=()=>{state.mine=!state.mine;fMine.setAttribute("aria-pressed",state.mine);if(state.mine&&!myName())needName();render()};
+
+function stats(){
+  const host=document.getElementById("stats");host.textContent="";if(!EV)return;
+  let total=0,filled=0,mine=0;
+  SHIFTS.forEach(sh=>sh.slots.forEach(sl=>{total++;const c=claimOf(slotId(sh,sl));if(c)filled++;if(isMine(c))mine++}));
+  [[total-filled,"open slots"],[filled+" / "+total,"filled"],...(myName()?[[mine,"slots under your name"]]:[])].forEach(([n,l])=>{
+    const d=el("div");d.append(el("b",null,String(n)),el("span",null,l));host.append(d)});
+}
+function overlaps(sh){
+  const n=norm(myName());if(!n)return [];
+  return SHIFTS.filter(o=>o.id!==sh.id&&o.start<sh.end&&sh.start<o.end&&o.slots.some(sl=>{const c=claimOf(slotId(o,sl));return c&&norm(c.name)===n}));
+}
+
+function render(){
+  stats();
+  const tl=document.getElementById("timeline");tl.textContent="";
+  if(!EV){tl.append(el("div","empty",state.loaded?"The sign-up sheet isn't open yet. Check back soon.":"Loading the schedule…"));return}
+  const n=norm(myName());
+  const shown=SHIFTS.filter(sh=>{
+    if(state.area!=="all"&&sh.a!==state.area)return false;
+    if(state.openOnly&&!sh.slots.some(sl=>!claimOf(slotId(sh,sl))))return false;
+    if(state.mine&&!sh.slots.some(sl=>isMine(claimOf(slotId(sh,sl)))))return false;
+    return true;
+  });
+  if(!shown.length){tl.append(el("div","empty",state.mine?(n?"You're not on any shifts yet. Turn off “My shifts” and pick a dashed slot.":"Type your name above to see your shifts."):"No shifts match these filters."));return}
+  let hour=-1,list=null;
+  shown.forEach(sh=>{
+    const h=Math.floor(sh.start/60);
+    if(h!==hour){hour=h;tl.append(el("div","hour",fmt(h*60).replace(":00","")));list=el("div","list");tl.append(list)}
+    list.append(card(sh));
+  });
+}
+function card(sh){
+  const A=AREAS[sh.a];
+  const c=el("article","shift");c.style.setProperty("--c",A.color);
+  const w=el("div","when",fmt(sh.start));w.append(el("small",null,"to "+fmt(sh.end)));
+  const m=el("div","main");
+  m.append(el("div","tag areaColor",A.label),el("h3",null,sh.t));
+  if(sh.d){const det=el("details","what");det.append(el("summary",null,"What you'll do"),el("p",null,sh.d));m.append(det)}
+  const slots=el("div","slots");
+  sh.slots.forEach(sl=>{
+    const id=slotId(sh,sl),cl=claimOf(id);
+    if(state.openOnly&&cl&&!isMine(cl))return;
+    const row=el("div","slot"+(cl?(isMine(cl)?" mine":""):" open"));
+    row.append(el("span","role",sl.role),el("span","who",cl?cl.name:"Open"));
+    const act=el("span");
+    if(!cl){
+      const b=el("button","btn take","Sign up");b.disabled=!state.db;
+      b.setAttribute("aria-label","Sign up for "+sh.t+", "+sl.role+", "+fmt(sh.start));
+      b.onclick=()=>tryClaim(sh,sl);act.append(b);
+    }else if(state.db){
+      const b=el("button","btn ghost","Remove");b.setAttribute("aria-label","Remove "+cl.name+" from "+sh.t);
+      b.onclick=()=>{state.confirm={id,kind:"remove"};render()};act.append(b);
+    }
+    row.append(act);
+    if(state.confirm&&state.confirm.id===id){
+      const cf=el("div","confirm");
+      if(state.confirm.kind==="remove"){
+        cf.append(el("span",null,"Remove "+cl.name+" from this slot?"));
+        const y=el("button","btn warn","Remove");y.onclick=()=>release(sh,sl);
+        const nn=el("button","btn ghost","Keep");nn.onclick=()=>{state.confirm=null;render()};cf.append(y,nn);
+      }else{
+        cf.append(el("span",null,"You're already on "+state.confirm.list+" at this time."));
+        const y=el("button","btn take","Sign up anyway");y.onclick=()=>claim(sh,sl);
+        const nn=el("button","btn ghost","Cancel");nn.onclick=()=>{state.confirm=null;render()};cf.append(y,nn);
+      }
+      row.append(cf);
+    }
+    slots.append(row);
+  });
+  m.append(slots);
+  const ex=el("div","exports"),p=el("button","linkbtn","Save shift as PDF");p.type="button";p.onclick=()=>shiftPdf(sh);ex.append(p);m.append(ex);
+  c.append(w,m);return c;
+}
+
+/* ---------- sign up / remove (each change is written together with a history entry) ---------- */
+function tryClaim(sh,sl){
+  if(!myName()){needName();return}
+  const ov=overlaps(sh);
+  if(ov.length){state.confirm={id:slotId(sh,sl),kind:"overlap",list:ov.map(o=>o.t+" ("+fmt(o.start)+")").join(", ")};render();return}
+  claim(sh,sl);
+}
+async function claim(sh,sl){
+  state.confirm=null;const id=slotId(sh,sl),path=P.slots(state.eventId)+"/"+id;
+  try{
+    const cur=await state.db.get(path);
+    if(cur&&cur.name){toast(cur.name+" just took that slot. Pick another one.");return}
+    const body={name:myName(),shift:sh.id,at:Date.now(),by:state.uid||""};
+    state.claims[id]=body;render();
+    await state.db.commit([{op:"set",path,data:body},{op:"add",coll:P.log(state.eventId),data:{type:"add",slot:id,shift:sh.id,name:body.name,actor:body.name,at:body.at,by:body.by}}]);
+    toast("You're signed up: "+sh.t+", "+range(sh),()=>release(sh,sl,true));
+  }catch(e){delete state.claims[id];render();toast("Couldn't save that. Check your connection and try again.")}
+}
+async function release(sh,sl,undo){
+  state.confirm=null;const id=slotId(sh,sl),prev=state.claims[id];if(!prev)return;
+  delete state.claims[id];render();
+  try{
+    await state.db.commit([{op:"delete",path:P.slots(state.eventId)+"/"+id},
+      {op:"add",coll:P.log(state.eventId),data:{type:"remove",slot:id,shift:sh.id,name:prev.name,actor:myName()||"",at:Date.now(),by:state.uid||"",undo:!!undo}}]);
+    if(!undo)toast("Slot is open again.");
+  }catch(e){state.claims[id]=prev;render();toast("Couldn't save that. Check your connection and try again.")}
+}
+
+document.getElementById("pdf-mine").onclick=()=>{if(!myName())return needName();if(EV)personPdf(myName())};
+document.getElementById("pdf-all").onclick=()=>{if(EV)allPdf()};
+document.getElementById("cal-mine").onclick=()=>{if(!myName())return needName();if(EV)personIcs(myName())};
+
+/* ---------- start ---------- */
+render();
+const conn=connectData();state.db=conn.db;
+if(conn.preview)document.getElementById("notice").textContent="Preview mode: sign-ups are saved only in this browser. Add your Firebase settings to firebase-config.js to go live.";
+conn.onUser(u=>{state.uid=u?u.uid:"";render()});
+let unsubSlots=null;
+watchCurrentEvent(conn.db,(id,ev)=>{
+  state.loaded=true;
+  if(!id||!ev){EV=null;state.eventId=null;render();return}
+  applyEvent(ev);renderHeader();
+  if(id!==state.eventId){
+    state.eventId=id;state.claims={};if(unsubSlots)unsubSlots();
+    unsubSlots=conn.db.onCol(P.slots(id),list=>{const next={};list.forEach(d=>{if(d.data&&d.data.name)next[d.id]=d.data});state.claims=next;render()},
+      ()=>toast("Live updates paused. Reload the page to reconnect."));
+  }
+  render();
+});
+</script>
+</body>
+</html>
