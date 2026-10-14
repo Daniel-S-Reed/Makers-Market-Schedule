@@ -62,6 +62,16 @@ const when=t=>t?new Date(t).toLocaleString("en-US",{month:"short",day:"numeric",
 const conn=connectData();
 if(conn.preview)$("notice").textContent="Preview mode: changes are saved only in this browser, and any password unlocks this page. Add your Firebase settings to firebase-config.js to go live.";
 
+/* Firebase refused a write: say why in a message that stays on screen */
+function saveFailed(e,what){
+  const code=(e&&e.code)||"";console.error(e);
+  if(/permission-denied/.test(code)){
+    $("notice").textContent=what+" Firebase's database rules blocked it. In the Firebase console, open Firestore Database > Rules and check that (1) the rules from firestore.rules are published and (2) the email in them is exactly "+(conn.managerEmail||"your manager email")+", the account this page signs in with. Then click Publish and try again.";
+    $("notice").scrollIntoView({behavior:"smooth",block:"center"});
+  }else if(/unavailable|network/.test(code))toast(what+" Check your internet connection and try again.");
+  else toast(what+" ("+(code||"unknown error")+")");
+}
+
 /* ---------- lock ---------- */
 $("lockform").addEventListener("submit",async e=>{
   e.preventDefault();$("lockerr").textContent="";
@@ -286,7 +296,7 @@ async function save(){
   const ops=[{op:"set",path:P.ev(state.selId),data:clone(d)}];
   lost.forEach(({id,c})=>{ops.push({op:"delete",path:P.slots(state.selId)+"/"+id},{op:"add",coll:P.log(state.selId),data:{type:"remove",slot:id,shift:id.split("-")[0],name:c.name,actor:"Manager (setup change)",at:Date.now(),by:state.user.uid}})});
   try{await conn.db.commit(ops);state.dirty=false;saveConfirm=false;toast("Setup saved. The sign-up page now shows these changes.");renderPanel()}
-  catch(e){toast("Couldn't save. Check your connection and that you're still unlocked.")}
+  catch(e){saveFailed(e,"Couldn't save.")}
 }
 
 /* ---------- Years ---------- */
@@ -297,7 +307,7 @@ function renderYears(p){
     const b=el("button","btn take","Set up from the original schedule");b.onclick=async()=>{
       b.disabled=true;const id=newEventId(""),now=Date.now(),ops=[{op:"set",path:P.ev(id),data:clone(DEFAULT_SETUP)},{op:"set",path:P.current,data:{eventId:id}}];
       Object.entries(SEED).forEach(([slot,name])=>{ops.push({op:"set",path:P.slots(id)+"/"+slot,data:{name,shift:slot.split("-")[0],at:now,by:""}},{op:"add",coll:P.log(id),data:{type:"add",slot,shift:slot.split("-")[0],name,actor:"Original schedule",at:now,by:""}})});
-      try{await conn.db.commit(ops);state.selId=null;selectEvent(id);state.tab="setup";toast("Sign-up sheet created. Set the date and location here.");renderPanel()}catch(e){b.disabled=false;toast("Couldn't create it. Check your connection.")}
+      try{await conn.db.commit(ops);state.selId=null;selectEvent(id);state.tab="setup";toast("Sign-up sheet created. Set the date and location here.");renderPanel()}catch(e){b.disabled=false;saveFailed(e,"Couldn't create it.")}
     };c.append(b);p.append(c);return;
   }
   const s=el("div","section");s.style.marginTop="0";s.append(el("h2",null,"All years"));
@@ -319,7 +329,7 @@ function renderYears(p){
     if(!nm.value.trim()){toast("Give the new event a name.");return}
     const id=newEventId(dt.value),data=clone(src);data.name=nm.value.trim();data.date=dt.value;
     const ops=[{op:"set",path:P.ev(id),data}];if(cb.checked)ops.push({op:"set",path:P.current,data:{eventId:id}});
-    try{await conn.db.commit(ops);selectEvent(id);state.tab="setup";toast(data.name+" created. Review the setup and save any changes.");renderPanel()}catch(e){toast("Couldn't create it. Check your connection.")}
+    try{await conn.db.commit(ops);selectEvent(id);state.tab="setup";toast(data.name+" created. Review the setup and save any changes.");renderPanel()}catch(e){saveFailed(e,"Couldn't create it.")}
   };
   ny.append(go);p.append(ny);
 }

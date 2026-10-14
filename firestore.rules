@@ -10,7 +10,7 @@ service cloud.firestore {
     function isHolidayManager() {
       return request.auth != null
         && request.auth.token.firebase.sign_in_provider == 'password'
-        && request.auth.token.email == 'MANAGER_EMAIL_HERE';
+        && request.auth.token.email.lower() == 'MANAGER_EMAIL_HERE'.lower();
     }
 
     // Which event is live on the sign-up page.
