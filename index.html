@@ -24,6 +24,10 @@
       <input id="myname" type="text" autocomplete="name" placeholder="First and last name" maxlength="60">
     </div>
     <div class="chips" id="areas" role="group" aria-label="Filter by area"></div>
+    <div class="chips viewsw" role="group" aria-label="View">
+      <button class="chip" id="v-list" aria-pressed="true">List</button>
+      <button class="chip" id="v-board" aria-pressed="false">Timeline</button>
+    </div>
     <div class="chips" role="group" aria-label="Show">
       <button class="chip" id="f-open" aria-pressed="false">Open slots only</button>
       <button class="chip" id="f-mine" aria-pressed="false">My shifts</button>
@@ -53,7 +57,7 @@
 <script src="firebase-config.js"></script>
 <script src="shared.js"></script>
 <script>
-const state={claims:{},eventId:null,area:"all",openOnly:false,mine:false,confirm:null,db:null,uid:"",loaded:false};
+const state={view:"list",openId:null,claims:{},eventId:null,area:"all",openOnly:false,mine:false,confirm:null,db:null,uid:"",loaded:false};
 const nameInput=document.getElementById("myname");
 try{nameInput.value=localStorage.getItem("hm-name")||""}catch(e){}
 nameInput.addEventListener("input",()=>{nameInput.classList.remove("need");try{localStorage.setItem("hm-name",nameInput.value.trim())}catch(e){};render()});
@@ -110,7 +114,9 @@ function render(){
     if(state.mine&&!sh.slots.some(sl=>isMine(claimOf(slotId(sh,sl)))))return false;
     return true;
   });
-  if(!shown.length){tl.append(el("div","empty",state.mine?(n?"You're not on any shifts yet. Turn off “My shifts” and pick a dashed slot.":"Type your name above to see your shifts."):"No shifts match these filters."));return}
+  if(!shown.length){drawPanel();tl.append(el("div","empty",state.mine?(n?"You're not on any shifts yet. Turn off “My shifts” and pick a dashed slot.":"Type your name above to see your shifts."):"No shifts match these filters."));return}
+  if(state.view==="board"){renderTimeline(tl,shown);drawPanel();return}
+  drawPanel();
   let hour=-1,list=null;
   shown.forEach(sh=>{
     const h=Math.floor(sh.start/60);
@@ -160,6 +166,57 @@ function card(sh){
   const ex=el("div","exports"),p=el("button","linkbtn","Save shift as PDF");p.type="button";p.onclick=()=>shiftPdf(sh);ex.append(p);m.append(ex);
   c.append(w,m);return c;
 }
+
+/* ---------- timeline view: areas across, time down (read like the printed schedule) ---------- */
+const PXM=1.6;
+function setView(v){state.view=v;try{localStorage.setItem("hm-view",v)}catch(e){};document.getElementById("v-list").setAttribute("aria-pressed",v==="list");document.getElementById("v-board").setAttribute("aria-pressed",v==="board");if(v==="list")state.openId=null;render()}
+document.getElementById("v-list").onclick=()=>setView("list");
+document.getElementById("v-board").onclick=()=>setView("board");
+try{if(localStorage.getItem("hm-view")==="board")state.view="board"}catch(e){}
+document.getElementById("v-list").setAttribute("aria-pressed",state.view==="list");document.getElementById("v-board").setAttribute("aria-pressed",state.view==="board");
+function renderTimeline(tl,shown){
+  const keys=AREA_ORDER.filter(k=>state.area==="all"||k===state.area);
+  const a=Math.floor(Math.min(...shown.map(x=>x.start))/60)*60,b=Math.ceil(Math.max(...shown.map(x=>x.end))/60)*60,H=(b-a)*PXM;
+  tl.append(el("p","muted small","Tap a shift to see its open spots and sign up."));
+  const scroll=el("div","boardScroll"),board=el("div","board");board.style.setProperty("--cols",keys.length);
+  const head=el("div","boardHead");head.append(el("div"));
+  keys.forEach(k=>{const h=el("div","colHead areaColor",AREAS[k].label);h.style.setProperty("--c",AREAS[k].color);head.append(h)});
+  const body=el("div","boardBody");body.style.height=H+"px";
+  const rail=el("div","rail");
+  for(let m=a;m<b;m+=30){const t=el("div","tick"+(m%60?"":" hr"),m%60?fmt(m).replace(/ [AP]M/,""):fmt(m).replace(":00",""));t.style.top=(m-a)*PXM+"px";rail.append(t)}
+  body.append(rail);
+  keys.forEach(k=>{
+    const col=el("div","col view");col.style.setProperty("--c",AREAS[k].color);
+    const items=shown.filter(x=>x.a===k),ends=[],lane={};
+    items.forEach(x=>{let l=ends.findIndex(e=>e<=x.start);if(l<0){l=ends.length;ends.push(0)}ends[l]=x.end;lane[x.id]=l});
+    items.forEach(sh=>{
+      const lanes=items.some(o=>o!==sh&&o.start<sh.end&&sh.start<o.end)?ends.length:1,ln=lanes===1?0:lane[sh.id];
+      const open=sh.slots.filter(sl=>!claimOf(slotId(sh,sl))).length,mine=sh.slots.some(sl=>isMine(claimOf(slotId(sh,sl))));
+      const bl=el("button","blk"+(mine?" mineb":"")+(state.openId===sh.id?" sel":"")+(open?"":" fullb"));bl.type="button";
+      bl.style.top=(sh.start-a)*PXM+1+"px";bl.style.height=Math.max(18,(sh.end-sh.start)*PXM-2)+"px";
+      bl.style.left="calc("+(ln/lanes*100)+"% + 3px)";bl.style.width="calc("+(100/lanes)+"% - 6px)";
+      bl.setAttribute("aria-label",sh.t+", "+range(sh)+", "+(open?open+" open":"full")+(mine?", you're on this shift":""));
+      bl.append(el("b",null,sh.t));
+      const meta=el("span","bm");meta.append(fmt(sh.start).replace(/ [AP]M/,"")+"–"+fmt(sh.end).replace(/ [AP]M/,"")+" · ");
+      meta.append(mine?el("span","you","You're on it"):open?el("span","open",open+" open"):el("span",null,"full"));bl.append(meta);
+      bl.onclick=()=>{state.openId=sh.id;state.confirm=null;render()};col.append(bl);
+    });
+    body.append(col);
+  });
+  board.append(head,body);scroll.append(board);tl.append(scroll);
+}
+/* side panel with one shift's sign-up card (timeline view) */
+function drawPanel(){
+  let dr=document.getElementById("drawer");
+  if(!dr){dr=el("aside","drawer");dr.id="drawer";dr.setAttribute("aria-label","Shift details");document.body.append(dr)}
+  const sh=state.view==="board"&&state.openId&&SHIFTS.find(x=>x.id===state.openId);
+  dr.hidden=!sh;if(!sh){state.openId=null;return}
+  const keep=dr.scrollTop;dr.textContent="";
+  const top=el("div","drawerTop");top.append(el("h2",null,fmt(sh.start).replace(/ [AP]M/,"")+"–"+fmt(sh.end)));
+  const x=el("button","btn ghost","Close");x.onclick=()=>{state.openId=null;render()};top.append(x);
+  dr.append(top,card(sh));dr.scrollTop=keep;
+}
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&state.openId){state.openId=null;render()}});
 
 /* ---------- sign up / remove (each change is written together with a history entry) ---------- */
 function tryClaim(sh,sl){
