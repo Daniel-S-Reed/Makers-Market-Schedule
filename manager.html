@@ -117,6 +117,7 @@ document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{if(state.tab==="setu
   if(state.tab==="setup"&&t.dataset.tab!=="setup"&&state.dirty){state.dirty=false;state.draft=state.ev?clone(state.ev):null}
   state.tab=t.dataset.tab;renderPanel()});
 function renderPanel(){
+  if(state.tab!=="setup"&&drawerId){drawerId=null}drawDrawer&&setTimeout(()=>drawDrawer(),0);
   document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected",t.dataset.tab===state.tab));
   const p=$("panel");p.textContent="";
   if(state.tab==="years")return renderYears(p);
@@ -190,7 +191,7 @@ function renderCoverage(p){
 }
 
 /* ---------- Set up (edits a draft; nothing changes until Save) ---------- */
-function touch(){state.dirty=true;drawSaveBar()}
+function touch(){state.dirty=true;drawSaveBar();const ds=$("drawerSave");if(ds)ds.hidden=false}
 function inp(type,val,on,attrs){const i=el(type==="textarea"?"textarea":"input");if(type!=="textarea")i.type=type;i.value=val==null?"":val;i.oninput=()=>{on(i.value);touch()};Object.assign(i,attrs||{});return i}
 function fieldOf(label,control){const f=el("label","field");f.append(label,control);return f}
 function filledName(shId,key){const c=state.claims[shId+"-"+key];return c?c.name:""}
@@ -212,10 +213,8 @@ function renderSetup(p){
     r.append(col,lab,up,dn,rm);s.append(r)});
   const addA=el("button","btn ghost","+ Add area");addA.onclick=()=>{d.areas.push({key:"a"+uid8(),label:"New area",color:"#5d6470"});touch();renderPanel()};s.append(addA);p.append(s);
   // shifts
-  s=el("div","section");s.append(el("h2",null,"Shifts & positions"),el("p",null,"Open a shift to change its name, area, times, description or positions."));
-  d.shifts.forEach((sh,i)=>s.append(shiftEditor(sh,i)));
-  const addS=el("button","btn ghost","+ Add shift");addS.onclick=()=>{const n={id:"s"+uid8(),a:(d.areas[0]||{}).key,t:"New shift",start:600,end:660,d:"",slots:[{role:"Staff",key:"p"+uid8()}]};d.shifts.push(n);state.open.add(n.id);touch();renderPanel()};
-  s.append(addS);p.append(s);
+  s=el("div","section");s.append(el("h2",null,"Shifts & positions"),el("p",null,"Each column is an area and each block is a shift. Click a block to change it, or click an empty spot in a column to add a shift there."));
+  const bh=el("div");bh.id="boardHost";s.append(bh);p.append(s);renderBoard(bh);
   // vendors
   const v=d.vendors=d.vendors||{perWindow:5,setup:[],unload:[]};
   s=el("div","section");s.append(el("h2",null,"Vendors"));const vg=el("div","grid2");
@@ -242,27 +241,106 @@ function winRow(w,onRemove,prefix){
   const a=inp("time",toHM(w.start),x=>w.start=fromHM(x)),b=inp("time",toHM(w.end),x=>w.end=fromHM(x));a.setAttribute("aria-label","Start");b.setAttribute("aria-label","End");
   const rm=el("button","linkbtn danger","Remove");rm.onclick=onRemove;r.append(a,el("span","muted","to"),b,rm);return r;
 }
-function shiftEditor(sh,i){
-  const d=state.draft,area=d.areas.find(a=>a.key===sh.a)||{label:"(no area)",color:"#5d6470"};
-  const det=el("details","editShift");det.style.setProperty("--c",area.color);det.open=state.open.has(sh.id);
-  det.ontoggle=()=>det.open?state.open.add(sh.id):state.open.delete(sh.id);
-  const sum=el("summary");const nf=sh.slots.filter(sl=>filledName(sh.id,sl.key)).length;
-  sum.append(el("span","num",range(sh)),el("span","t",sh.t||"(untitled)"),el("span","m",area.label+" · "+sh.slots.length+" position"+(sh.slots.length===1?"":"s")+", "+nf+" filled"));det.append(sum);
-  const b=el("div","body"),g=el("div","grid2");
-  const sel=el("select");d.areas.forEach(a=>{const o=el("option",null,a.label);o.value=a.key;o.selected=a.key===sh.a;sel.append(o)});sel.onchange=()=>{sh.a=sel.value;touch();renderPanel()};
-  g.append(fieldOf("Shift name",inp("text",sh.t,v=>sh.t=v,{maxLength:80})),fieldOf("Area",sel),
-    fieldOf("Starts",inp("time",toHM(sh.start),v=>sh.start=fromHM(v))),fieldOf("Ends",inp("time",toHM(sh.end),v=>sh.end=fromHM(v))));
-  b.append(g,fieldOf("What the job involves",inp("textarea",sh.d,v=>sh.d=v,{maxLength:1000})));
-  const pos=el("div");pos.append(el("strong",null,"Positions"));
-  sh.slots.forEach((sl,j)=>{const r=el("div","pos");const t=inp("text",sl.role,v=>sl.role=v,{maxLength:40});t.setAttribute("aria-label","Position name");r.append(t);
-    const who=filledName(sh.id,sl.key);if(who)r.append(el("span","filled","Filled by "+who));
-    const rm=el("button","linkbtn danger","Remove");rm.onclick=()=>{sh.slots.splice(j,1);touch();renderPanel()};r.append(rm);pos.append(r)});
-  const addP=el("button","btn ghost","+ Add position");addP.onclick=()=>{sh.slots.push({role:(sh.slots[sh.slots.length-1]||{role:"Staff"}).role,key:"p"+uid8()});touch();renderPanel()};
-  pos.append(addP);b.append(pos);
-  const act=el("div","row");
-  const dup=el("button","btn ghost","Duplicate shift");dup.onclick=()=>{const c=clone(sh);c.id="s"+uid8();c.slots.forEach(x=>x.key="p"+uid8());c.start=sh.end;c.end=sh.end+(sh.end-sh.start);d.shifts.push(c);state.open.add(c.id);touch();renderPanel()};
-  const del=el("button","linkbtn danger","Delete shift");del.onclick=()=>{d.shifts.splice(d.shifts.indexOf(sh),1);touch();renderPanel()};
-  act.append(dup,del);b.append(act);det.append(b);return det;
+/* ---- shifts board: areas across, time down, one block per shift ---- */
+const PXM=1.6; // pixels per minute (15 minutes = 24px)
+function boardRange(d){
+  const ts=d.shifts.flatMap(x=>[x.start,x.end]);
+  const a=Math.floor((ts.length?Math.min(...ts):480)/60)*60, b=Math.ceil((ts.length?Math.max(...ts):1020)/60)*60+60;
+  return [Math.max(0,a-30),Math.min(1440,b)];
+}
+function refreshBoard(){const h=$("boardHost");if(h)renderBoard(h)}
+function renderBoard(host){
+  const d=state.draft;host.textContent="";if(!d)return;
+  if(!d.areas.length){host.append(el("div","empty","Add an area first. Each area becomes a column here."));return}
+  const [a,b]=boardRange(d),H=(b-a)*PXM;
+  const scroll=el("div","boardScroll"),board=el("div","board");board.style.setProperty("--cols",d.areas.length);
+  const head=el("div","boardHead");head.append(el("div"));
+  d.areas.forEach(ar=>{const h=el("div","colHead areaColor",ar.label);h.style.setProperty("--c",ar.color);head.append(h)});
+  const body=el("div","boardBody");body.style.height=H+"px";body.style.setProperty("--off",((a%60)*PXM)+"px");
+  const rail=el("div","rail");
+  for(let m=Math.ceil(a/30)*30;m<b;m+=30){const t=el("div","tick"+(m%60?"":" hr"),fmt(m).replace(/:00 /," ").replace(/ [AP]M/,m%60?"":"$&"));t.style.top=(m-a)*PXM+"px";rail.append(t)}
+  body.append(rail);
+  d.areas.forEach(ar=>{
+    const col=el("div","col");col.style.setProperty("--c",ar.color);col.title="Click an empty spot to add a shift in "+ar.label;
+    col.onclick=e=>{if(e.target!==col)return;newShift(ar.key,a+Math.floor(e.offsetY/PXM/15)*15)};
+    const items=d.shifts.filter(x=>x.a===ar.key).sort((x,y)=>x.start-y.start),ends=[];
+    items.forEach(x=>{let l=ends.findIndex(e=>e<=x.start);if(l<0){l=ends.length;ends.push(0)}ends[l]=x.end;x._lane=l});
+    items.forEach(sh=>{
+      const lanes=items.some(o=>o!==sh&&o.start<sh.end&&sh.start<o.end)?ends.length:1,lane=lanes===1?0:sh._lane;delete sh._lane;
+      const nf=sh.slots.filter(sl=>filledName(sh.id,sl.key)).length,open=sh.slots.length-nf;
+      const bl=el("button","blk"+(drawerId===sh.id?" sel":""));bl.type="button";
+      bl.style.top=(sh.start-a)*PXM+1+"px";bl.style.height=Math.max(18,(sh.end-sh.start)*PXM-2)+"px";
+      bl.style.left="calc("+(lane/lanes*100)+"% + 3px)";bl.style.width="calc("+(100/lanes)+"% - 6px)";
+      bl.title=sh.t+"\n"+range(sh)+"\n"+groups(sh).map(g=>g.role+" × "+g.slots.length).join(", ");
+      bl.append(el("b",null,sh.t||"(untitled)"));
+      const meta=el("span","bm");meta.append(fmt(sh.start).replace(/ [AP]M/,"")+"–"+fmt(sh.end).replace(/ [AP]M/,"")+" · ");
+      meta.append(open?el("span","open",open+" open"):el("span",null,"full"));bl.append(meta);
+      bl.onclick=()=>openShift(sh.id);col.append(bl);
+    });
+    body.append(col);
+  });
+  board.append(head,body);scroll.append(board);host.append(scroll);
+  const add=el("button","btn ghost","+ Add a shift");add.style.marginTop="10px";add.onclick=()=>newShift(d.areas[0].key,600);host.append(add);
+}
+function newShift(area,start){
+  const n={id:"s"+uid8(),a:area,t:"New shift",start,end:start+30,d:"",slots:[{role:"Staff",key:"p"+uid8()}]};
+  state.draft.shifts.push(n);touch();openShift(n.id,true);
+}
+/* positions are stored one per person; the editor shows them grouped as "role × count" */
+function groups(sh){const g=[];sh.slots.forEach(sl=>{let x=g.find(y=>y.role===sl.role);if(!x){x={role:sl.role,slots:[]};g.push(x)}x.slots.push(sl)});return g}
+
+/* ---- side panel for one shift ---- */
+let drawerId=null;
+function openShift(id,focusName){drawerId=id;drawDrawer(focusName);refreshBoard()}
+function closeDrawer(){drawerId=null;drawDrawer();refreshBoard()}
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&drawerId)closeDrawer()});
+function drawDrawer(focusName){
+  let dr=$("drawer");if(!dr){dr=el("aside","drawer");dr.id="drawer";dr.setAttribute("aria-label","Edit shift");document.body.append(dr)}
+  const d=state.draft,sh=state.tab==="setup"&&d&&d.shifts.find(x=>x.id===drawerId);
+  dr.hidden=!sh;if(!sh){drawerId=null;return}
+  const keep=dr.scrollTop;dr.textContent="";
+  const top=el("div","drawerTop");top.append(el("h2",null,"Edit shift"));
+  const done=el("button","btn take","Done");done.onclick=closeDrawer;top.append(done);dr.append(top);
+  const live=(fn)=>v=>{fn(v);refreshBoard()};
+  const name=inp("text",sh.t,live(v=>sh.t=v),{maxLength:80});dr.append(fieldOf("Shift name",name));
+  const sel=el("select");d.areas.forEach(a=>{const o=el("option",null,a.label);o.value=a.key;o.selected=a.key===sh.a;sel.append(o)});
+  sel.onchange=()=>{sh.a=sel.value;touch();refreshBoard()};dr.append(fieldOf("Area",sel));
+  const tr=el("div","grid2");
+  const st=inp("time",toHM(sh.start),live(v=>{const len=sh.end-sh.start;sh.start=fromHM(v);if(sh.end<=sh.start)sh.end=sh.start+len}),{step:300});
+  const en=inp("time",toHM(sh.end),live(v=>sh.end=fromHM(v)),{step:300});
+  tr.append(fieldOf("Starts",st),fieldOf("Ends",en));dr.append(tr);
+  dr.append(fieldOf("What the job involves",inp("textarea",sh.d,v=>sh.d=v,{maxLength:1000})));
+  // positions
+  const ph=el("div");ph.append(el("strong",null,"Who's needed"),el("div","muted","Each line is one kind of position and how many people it needs."));dr.append(ph);
+  groups(sh).forEach(g=>{
+    const box=el("div","posgrp"),row=el("div","row");
+    const role=inp("text",g.role,live(v=>g.slots.forEach(x=>x.role=v)),{maxLength:40});role.setAttribute("aria-label","Position name");role.style.flex="1 1 140px";
+    const stp=el("div","stepper");
+    const minus=el("button",null,"−");minus.type="button";minus.setAttribute("aria-label","One fewer "+g.role);
+    const plus=el("button",null,"+");plus.type="button";plus.setAttribute("aria-label","One more "+g.role);
+    minus.onclick=()=>{const openOne=[...g.slots].reverse().find(x=>!filledName(sh.id,x.key))||g.slots[g.slots.length-1];sh.slots.splice(sh.slots.indexOf(openOne),1);touch();drawDrawer();refreshBoard()};
+    plus.onclick=()=>{const at=sh.slots.indexOf(g.slots[g.slots.length-1])+1;sh.slots.splice(at,0,{role:g.role,key:"p"+uid8()});touch();drawDrawer();refreshBoard()};
+    stp.append(minus,el("span",null,String(g.slots.length)),plus);
+    row.append(role,stp);box.append(row);
+    const names=g.slots.map(x=>filledName(sh.id,x.key)).filter(Boolean);
+    box.append(el("div","muted small",names.length?"Signed up: "+names.join(", ")+(names.length<g.slots.length?" · "+(g.slots.length-names.length)+" open":""):"All open"));
+    if(sh.slots.length>g.slots.length){const rm=el("button","linkbtn danger","Remove this position");rm.onclick=()=>{g.slots.forEach(x=>sh.slots.splice(sh.slots.indexOf(x),1));touch();drawDrawer();refreshBoard()};box.append(rm)}
+    dr.append(box);
+  });
+  const addG=el("div","row");addG.append(el("span","muted","Add:"));
+  ["Staff","Volunteer","Other…"].forEach(r=>{const b=el("button","chip",r);b.type="button";b.onclick=()=>{
+    const role=r==="Other…"?"New position":r,ex=groups(sh).find(g=>g.role===role);
+    if(ex){const at=sh.slots.indexOf(ex.slots[ex.slots.length-1])+1;sh.slots.splice(at,0,{role,key:"p"+uid8()})}else sh.slots.push({role,key:"p"+uid8()});
+    touch();drawDrawer();refreshBoard()};addG.append(b)});
+  dr.append(addG);
+  // actions
+  const act=el("div","row drawerActs");
+  const dup=el("button","btn ghost","Duplicate right after");dup.onclick=()=>{const c=clone(sh);c.id="s"+uid8();c.slots.forEach(x=>x.key="p"+uid8());c.start=sh.end;c.end=sh.end+(sh.end-sh.start);d.shifts.push(c);touch();openShift(c.id)};
+  const del=el("button","linkbtn danger","Delete shift");del.onclick=()=>{d.shifts.splice(d.shifts.indexOf(sh),1);touch();closeDrawer()};
+  act.append(dup,del);dr.append(act);
+  const sv=el("div","drawerSave");sv.id="drawerSave";sv.hidden=!state.dirty;sv.append(el("span",null,"Changes aren't live until you save."));const svb=el("button","btn take","Save now");svb.onclick=()=>{closeDrawer();save()};sv.append(svb);dr.append(sv);
+  dr.scrollTop=keep;
+  if(focusName){name.focus();name.select()}
 }
 function problems(d){
   const out=[];

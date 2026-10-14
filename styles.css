@@ -143,3 +143,39 @@ td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
 .savebar{position:sticky;bottom:calc(10px + env(safe-area-inset-bottom,0px));margin-top:22px;background:var(--ink);color:var(--bg);border-radius:12px;padding:10px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;z-index:30}
 .savebar .btn.ghost{color:var(--bg);border-color:color-mix(in srgb,var(--bg),transparent 60%)}
 .savebar .warnmsg{flex-basis:100%;font-size:14px}
+
+/* ---------- manager: shifts board ---------- */
+.boardScroll{overflow:auto;max-height:min(72vh,900px);overscroll-behavior:contain;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.board{min-width:calc(60px + var(--cols) * 150px)}
+.boardHead,.boardBody{display:grid;grid-template-columns:60px repeat(var(--cols),minmax(150px,1fr))}
+.boardHead{border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:3}
+.colHead{padding:9px 8px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border-left:1px solid var(--line)}
+.boardBody{position:relative}
+.rail{position:relative}
+.tick{position:absolute;right:8px;font-size:11px;color:var(--muted);transform:translateY(2px);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tick.hr{font-weight:700;color:var(--ink)}
+.col{position:relative;border-left:1px solid var(--line);cursor:copy;
+  background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(color-mix(in srgb,var(--line),transparent 55%) 1px,transparent 1px);
+  background-size:100% 96px,100% 48px;background-position:0 calc(-1 * var(--off,0px)),0 calc(-1 * var(--off,0px))}
+.col:hover{background-color:color-mix(in srgb,var(--c),transparent 94%)}
+.blk{position:absolute;display:flex;flex-direction:column;gap:1px;border:1px solid color-mix(in srgb,var(--c),transparent 45%);border-left:4px solid var(--c);
+  background:color-mix(in srgb,var(--c),var(--surface) 86%);border-radius:6px;padding:3px 6px;text-align:left;font:inherit;font-size:12px;line-height:1.25;color:var(--ink);overflow:hidden;cursor:pointer}
+.blk:hover{background:color-mix(in srgb,var(--c),var(--surface) 76%)}
+.blk:focus-visible{outline:2px solid var(--pine);outline-offset:1px}
+.blk.sel{outline:2px solid var(--ink);outline-offset:1px;z-index:2}
+.blk b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.blk .bm{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.blk .open{color:var(--berry);font-weight:700}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(420px,100%);background:var(--surface);border-left:1px solid var(--line);box-shadow:-10px 0 30px rgba(0,0,0,.18);z-index:35;overflow-y:auto;
+  padding:max(16px,env(safe-area-inset-top,0px)) max(18px,env(safe-area-inset-right,0px)) calc(20px + env(safe-area-inset-bottom,0px)) 18px;display:flex;flex-direction:column;gap:14px}
+.drawerTop{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.drawerTop h2{margin:0}
+.posgrp{border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px}
+.posgrp .linkbtn{align-self:flex-start;font-size:13px}
+.small{font-size:13px}
+.stepper{display:inline-flex;align-items:center;border:1.5px solid var(--line);border-radius:8px;overflow:hidden}
+.stepper button{font:inherit;font-weight:700;font-size:16px;width:36px;height:36px;border:0;background:var(--bg);color:var(--ink);cursor:pointer}
+.stepper button:focus-visible{outline:2px solid var(--pine);outline-offset:-2px}
+.stepper span{min-width:36px;text-align:center;font-variant-numeric:tabular-nums;font-weight:700}
+.drawerActs{justify-content:space-between;border-top:1px solid var(--line);padding-top:12px}
+.drawerSave{position:sticky;bottom:0;background:var(--ink);color:var(--bg);border-radius:10px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;font-size:14px}
